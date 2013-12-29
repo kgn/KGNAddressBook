@@ -6,18 +6,12 @@
 //  Copyright (c) 2012 David Keegan. All rights reserved.
 //
 
-#import "NBLAddressBookManager.h"
-#import "BBlock.h"
-#import "NBLContact.h"
-#import "PJTernarySearchTree.h"
+#import "KGNAddressBookManager.h"
+#import "KGNAddressBookContact.h"
 
-NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManagerAddressBookUpdated";
+NSString *const KGNAddressBookManagerAddressBookUpdateNotification = @"KGNAddressBookManagerAddressBookUpdateNotification";
 
-@interface NBLAddressBookManager()
-@property (strong, readwrite) PJTernarySearchTree *tagSearchTree;
-@end
-
-@implementation NBLAddressBookManager
+@implementation KGNAddressBookManager
 
 + (id)sharedManager{
     static id sharedManager;
@@ -48,7 +42,7 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
     }else{
         _addressBook = NULL;
     }
-    [[NSNotificationCenter defaultCenter] postNotificationName:NBLAddressBookManagerAddressBookUpdated object:self];
+    [[NSNotificationCenter defaultCenter] postNotificationName:KGNAddressBookManagerAddressBookUpdateNotification object:self];
 }
 
 - (BOOL)hasAccess{
@@ -61,12 +55,9 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
 }
 
 - (void)requestContactsWithBlock:(void(^)(BOOL granted, NSArray *contacts, NSError *error))block{
-    BBlockWeakSelf wself = self;
-    CFTimeInterval before = CFAbsoluteTimeGetCurrent();
-    PJTernarySearchTree *tagSearchTree = [[PJTernarySearchTree alloc] init];
-//    NSLog(@"%@", [tagSearchTree retrievePrefix:@""]);
+    __typeof__(self) __weak wself = self;
     ABAddressBookRequestAccessWithCompletion([self addressBook], ^(bool granted, CFErrorRef error){
-        [BBlock dispatchOnMainThread:^{
+        dispatch_async(dispatch_get_main_queue(), ^{
             if(!granted){
                 NSLog(@"%@:%@ NOT GRANTED", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
                 block(granted, nil, CFBridgingRelease(error));
@@ -84,7 +75,7 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
                 return;
             }
             CFMutableArrayRef allMutableSortedContacts = CFArrayCreateMutableCopy(kCFAllocatorDefault, CFArrayGetCount(allContacts), allContacts);
-            CFArraySortValues(allMutableSortedContacts, CFRangeMake(0, CFArrayGetCount(allMutableSortedContacts)), (CFComparatorFunction)ABPersonComparePeopleByName, (void*)ABPersonGetSortOrdering());
+            CFArraySortValues(allMutableSortedContacts, CFRangeMake(0, CFArrayGetCount(allMutableSortedContacts)), (CFComparatorFunction)ABPersonComparePeopleByName, (void *)ABPersonGetSortOrdering());
             CFRelease(allContacts);
 
             NSMutableArray *contacts = [NSMutableArray array];
@@ -104,16 +95,7 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
                     continue;
                 }
 
-                if(note){
-                    BBlockWeakObject(tagSearchTree) wtagSearchTree = tagSearchTree;
-                    [BBlock dispatchOnHighPriorityConcurrentQueue:^{
-                        [[wself class] findTagsInText:note withBlock:^(NSString *matchString, NSRange matchRange){
-                            [wtagSearchTree insertString:[[matchString substringFromIndex:1] lowercaseString]];
-                        }];
-                    }];
-                }
-
-                NBLContact *contact = [NBLContact contactWithAddressBookRecord:record];
+                KGNAddressBookContact *contact = [KGNAddressBookContact contactWithAddressBookRecord:record];
                 NSArray *linkedContacts = CFBridgingRelease(ABPersonCopyArrayOfAllLinkedPeople(record));
                 for(id linkedRecordObj in linkedContacts){
                     ABRecordRef linkedRecord = (__bridge ABRecordRef)linkedRecordObj;
@@ -124,23 +106,17 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
                 [contacts addObject:contact];
             }
 
-            self.tagSearchTree = tagSearchTree;
-
             // Just in case revert any changes
             if(ABAddressBookHasUnsavedChanges([self addressBook])){
                 ABAddressBookRevert([self addressBook]);
             }
 
-            CFTimeInterval after = CFAbsoluteTimeGetCurrent();
-            [Flurry logEvent:@"ContactsTime" withParameters:@{@"time":@((after-before)*1000)}];
-            NSLog(@"Contacts time %zdms", (NSUInteger)((after - before) * 1000));
-
             block(granted, [NSArray arrayWithArray:contacts], CFBridgingRelease(error));
-        }];
+        });
     });
 }
 
-- (BOOL)removeContact:(NBLContact *)contact error:(NSError **)error{
+- (BOOL)removeContact:(KGNAddressBookContact *)contact error:(NSError **)error{
     CFErrorRef cferror = NULL;
     BOOL success = ABAddressBookRemoveRecord([self addressBook], contact.record, &cferror);
     if(!success){
@@ -153,19 +129,19 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
 
 }
 
-- (NBLContact *)contactWithName:(NSString *)name orRecordID:(NSNumber *)recordID{
-    NBLContact *contact;
+- (KGNAddressBookContact *)contactWithName:(NSString *)name orRecordID:(NSNumber *)recordID{
+    KGNAddressBookContact *contact;
     name = [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSArray *contacts = CFBridgingRelease(ABAddressBookCopyPeopleWithName([self addressBook], (__bridge CFStringRef)name));
     if([contacts count] == 1){
         ABRecordRef record = (__bridge ABRecordRef)contacts[0];
-        contact = [NBLContact contactWithAddressBookRecord:record];
+        contact = [KGNAddressBookContact contactWithAddressBookRecord:record];
     }else if([contacts count] > 1){
         if(recordID){
             for(id recordObj in contacts){
                 ABRecordRef record = (__bridge ABRecordRef)recordObj;
                 if([recordID integerValue] == ABRecordGetRecordID(record)){
-                    contact = [NBLContact contactWithAddressBookRecord:record];
+                    contact = [KGNAddressBookContact contactWithAddressBookRecord:record];
                     break;
                 }
             }
@@ -173,7 +149,7 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
 
         if(!contact){
             ABRecordRef record = (__bridge ABRecordRef)contacts[0];
-            contact = [NBLContact contactWithAddressBookRecord:record];
+            contact = [KGNAddressBookContact contactWithAddressBookRecord:record];
         }
     }
 
@@ -205,30 +181,6 @@ NSString *const NBLAddressBookManagerAddressBookUpdated = @"NBLAddressBookManage
     }
 
     return YES;
-}
-
-+ (void)findTagsInText:(NSString *)text withBlock:(void(^)(NSString *matchString, NSRange matchRange))block{
-    if(text == nil){
-        return;
-    }
-
-    // Add a space to the front to match tags at the very beginning of the string
-    text = [NSString stringWithFormat:@" %@", text];
-
-    NSError *error = nil;
-    NSString *pattern = [NSString stringWithFormat:@"\\s+%@*(%@{1}[\\w\\d\\_]+)", NBLPreferencesNoteTagCharacter, NBLPreferencesNoteTagCharacter];
-    NSRegularExpression *regex =
-    [NSRegularExpression regularExpressionWithPattern:pattern options:NSRegularExpressionCaseInsensitive error:&error];
-    if(error){
-        [Flurry logError:NBLClassAndSelector message:@"Error while trying to regex contact note" error:error];
-    }
-    NSArray *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
-    for(NSTextCheckingResult *match in matches){
-        NSRange matchRange = [match rangeAtIndex:1];
-        NSString *matchString = [text substringWithRange:matchRange];
-        matchRange.location -= 1; // step backwards because of the space we added
-        block(matchString, matchRange);
-    }
 }
 
 @end

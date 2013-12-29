@@ -1,17 +1,17 @@
 //
-//  NBLPerson.h
-//  Contact Notes
+//  KGNContact.h
+//  KGNAddressBook
 //
 //  Created by David Keegan on 11/23/12.
 //  Copyright (c) 2012 David Keegan. All rights reserved.
 //
 
-#import <Foundation/Foundation.h>
+@import AddressBook;
 
-extern NSString *const NBLContactNoteChangedNotification;
-extern NSString *const NBLContactIsInvalidNotification;
+extern NSString *const KGNAddressBookContactNoteChangedNotification;
+extern NSString *const KGNAddressBookContactIsInvalidNotification;
 
-@interface NBLContact : NSObject
+@interface KGNAddressBookContact : NSObject
 
 @property (readonly) UIImage *profileImage;
 @property (nonatomic, readonly) ABRecordRef record;
@@ -25,7 +25,7 @@ extern NSString *const NBLContactIsInvalidNotification;
 @property (strong, nonatomic, readonly) NSString *sectionName;
 @property (readonly, getter=isValid) BOOL valid;
 
-+ (id)contactWithAddressBookRecord:(ABRecordRef)record;
++ (instancetype)contactWithAddressBookRecord:(ABRecordRef)record;
 + (NSCache *)profileImageCache;
 
 - (void)mergeInfoFromRecord:(ABRecordRef)record;
@@ -34,8 +34,5 @@ extern NSString *const NBLContactIsInvalidNotification;
 
 - (BOOL)addURL:(NSURL *)url withName:(NSString *)name andError:(NSError **)error;
 - (BOOL)setNote:(NSString *)note error:(NSError **)error;
-
-- (NSSet *)addresses;
-- (NSSet *)twitterAccounts;
 
 @end

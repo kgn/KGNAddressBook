@@ -6,17 +6,16 @@
 //  Copyright (c) 2012 David Keegan. All rights reserved.
 //
 
-#import "NBLContact.h"
-#import "NBLAddressBookManager.h"
-#import "NSObject+BBlock.h"
-#import "TTTAddressFormatter.h"
+#import "KGNAddressBookContact.h"
+#import "KGNAddressBookManager.h"
 
-NSString *const NBLContactNoteChangedNotification = @"NBLContactNoteChangedNotification";
-NSString *const NBLContactIsInvalidNotification = @"NBLContactIsInvalidNotification";
+NSString *const KGNAddressBookContactNoteChangedNotification = @"KGNAddressBookContactNoteChangedNotification";
+NSString *const KGNAddressBookContactIsInvalidNotification = @"KGNAddressBookContactIsInvalidNotification";
 
-@interface NBLContact()
+@interface KGNAddressBookContact()
 @property (nonatomic, readwrite) ABRecordRef record;
 @property (nonatomic, readwrite) BOOL isOrganization;
+@property (strong, nonatomic, readwrite) NSString *note;
 @property (strong, nonatomic, readwrite) NSString *firstName;
 @property (strong, nonatomic, readwrite) NSString *lastName;
 @property (strong, nonatomic, readwrite) NSString *organizationName;
@@ -25,7 +24,7 @@ NSString *const NBLContactIsInvalidNotification = @"NBLContactIsInvalidNotificat
 @property (strong, nonatomic, readwrite) NSString *sectionName;
 @end
 
-@implementation NBLContact
+@implementation KGNAddressBookContact
 
 + (id)contactWithAddressBookRecord:(ABRecordRef)record{
     return [[self alloc] initWithAddressBookRecord:record];
@@ -45,9 +44,7 @@ NSString *const NBLContactIsInvalidNotification = @"NBLContactIsInvalidNotificat
 - (void)mergeInfoFromRecord:(ABRecordRef)record{
     NSString *note = CFBridgingRelease(ABRecordCopyValue(record, kABPersonNoteProperty));
     if([self.note length] == 0 && [note length] > 0){
-        [self changeValueWithKey:@"note" changeBlock:^{
-            _note = note;
-        }];
+        self.note = note;
     }
 
     self.displayName = CFBridgingRelease(ABRecordCopyCompositeName(record));
@@ -60,7 +57,7 @@ NSString *const NBLContactIsInvalidNotification = @"NBLContactIsInvalidNotificat
         self.isOrganization = YES;
     }
 
-    if([[NBLAddressBookManager sharedManager] sortByFirstName]){
+    if([[KGNAddressBookManager sharedManager] sortByFirstName]){
         self.sectionName = self.firstName ?: self.displayName;
     }else{
         self.sectionName = self.lastName ?: self.displayName;
@@ -142,13 +139,13 @@ NSString *const NBLContactIsInvalidNotification = @"NBLContactIsInvalidNotificat
 
 - (BOOL)isValid{
     ABRecordID recordID = ABRecordGetRecordID(self.record);
-    ABRecordRef record = ABAddressBookGetPersonWithRecordID([[NBLAddressBookManager sharedManager] addressBook], recordID);
+    ABRecordRef record = ABAddressBookGetPersonWithRecordID([[KGNAddressBookManager sharedManager] addressBook], recordID);
     return (record != NULL);
 }
 
 - (void)updateContact{
     ABRecordID recordID = ABRecordGetRecordID(self.record);
-    ABRecordRef record = ABAddressBookGetPersonWithRecordID([[NBLAddressBookManager sharedManager] addressBook], recordID);
+    ABRecordRef record = ABAddressBookGetPersonWithRecordID([[KGNAddressBookManager sharedManager] addressBook], recordID);
     if(record){
         [self mergeInfoFromRecord:record];
         [self updateNoteWithRecord:record];
@@ -157,19 +154,15 @@ NSString *const NBLContactIsInvalidNotification = @"NBLContactIsInvalidNotificat
 
 - (void)updateNote{
     ABRecordID recordID = ABRecordGetRecordID(self.record);
-    ABRecordRef record = ABAddressBookGetPersonWithRecordID([[NBLAddressBookManager sharedManager] addressBook], recordID);
+    ABRecordRef record = ABAddressBookGetPersonWithRecordID([[KGNAddressBookManager sharedManager] addressBook], recordID);
     [self updateNoteWithRecord:record];
 }
 
 - (void)updateNoteWithRecord:(ABRecordRef)record{
     if(record){
-        [self changeValueWithKey:@"note" changeBlock:^{
-            _note = CFBridgingRelease(ABRecordCopyValue(record, kABPersonNoteProperty));
-        }];
+        self.note = CFBridgingRelease(ABRecordCopyValue(record, kABPersonNoteProperty));
     }else{
-        [self changeValueWithKey:@"note" changeBlock:^{
-            _note = nil;
-        }];
+        self.note = nil;
     }
 }
 
@@ -192,80 +185,41 @@ NSString *const NBLContactIsInvalidNotification = @"NBLContactIsInvalidNotificat
         }
         return NO;
     }
-    if(![[NBLAddressBookManager sharedManager] saveWithError:error]){
+    if(![[KGNAddressBookManager sharedManager] saveWithError:error]){
         return NO;
     }
 
-    [self changeValueWithKey:@"note" changeBlock:^{
-        _note = note;
-    }];
+    self.note = note;
 
     [[NSNotificationCenter defaultCenter]
-     postNotificationName:NBLContactNoteChangedNotification object:self];
+     postNotificationName:KGNAddressBookContactNoteChangedNotification object:self];
     return YES;
 }
 
-- (NSSet *)addresses{
-    ABMultiValueRef addressMultiValue = ABRecordCopyValue(self.record, kABPersonAddressProperty);
-    NSMutableSet *addressProfiles = [NSMutableSet setWithArray:CFBridgingRelease(ABMultiValueCopyArrayOfAllValues(addressMultiValue))];
-    NSArray *linkedContacts = CFBridgingRelease(ABPersonCopyArrayOfAllLinkedPeople(self.record));
-    for(id linkedRecordObj in linkedContacts){
-        ABRecordRef linkedRecord = (__bridge ABRecordRef)linkedRecordObj;
-        ABMultiValueRef linkedAddressMultiValue = ABRecordCopyValue(linkedRecord, kABPersonAddressProperty);
-        NSArray *linkedAddressProfiles = CFBridgingRelease(ABMultiValueCopyArrayOfAllValues(linkedAddressMultiValue));
-        [addressProfiles addObjectsFromArray:linkedAddressProfiles];
-        CFRelease(linkedAddressMultiValue);
-    }
-    CFRelease(addressMultiValue);
-
-    NSMutableSet *addresses = [NSMutableSet set];
-    for(NSDictionary *addressProfile in addressProfiles){
-        static dispatch_once_t onceToken;
-        static TTTAddressFormatter *addressFormatter;
-        dispatch_once(&onceToken, ^{
-            addressFormatter = [[TTTAddressFormatter alloc] init];
-        });
-        NSString *address =
-        [addressFormatter stringFromAddressWithStreet:addressProfile[(NSString *)kABPersonAddressStreetKey]
-                                             locality:addressProfile[(NSString *)kABPersonAddressCityKey]
-                                               region:addressProfile[(NSString *)kABPersonAddressStateKey]
-                                           postalCode:addressProfile[(NSString *)kABPersonAddressZIPKey]
-                                              country:addressProfile[(NSString *)kABPersonAddressCountryKey]];
-        [addresses addObject:address];
+- (BOOL)isEqualToAddressBookContact:(KGNAddressBookContact *)addressBookContact{
+    if(!addressBookContact){
+        return NO;
     }
 
-    return [NSSet setWithSet:addresses];
+    return self.record == addressBookContact.record;
 }
 
-- (NSSet *)twitterAccounts{
-    ABMultiValueRef socialProfileMultiValue = ABRecordCopyValue(self.record, kABPersonSocialProfileProperty);
-    NSMutableSet *socialProfiles = [NSMutableSet setWithArray:CFBridgingRelease(ABMultiValueCopyArrayOfAllValues(socialProfileMultiValue))];
-    NSArray *linkedContacts = CFBridgingRelease(ABPersonCopyArrayOfAllLinkedPeople(self.record));
-    for(id linkedRecordObj in linkedContacts){
-        ABRecordRef linkedRecord = (__bridge ABRecordRef)linkedRecordObj;
-        ABMultiValueRef linkedSocialProfileMultiValue = ABRecordCopyValue(linkedRecord, kABPersonSocialProfileProperty);
-        NSArray *linkedSocialProfiles = CFBridgingRelease(ABMultiValueCopyArrayOfAllValues(linkedSocialProfileMultiValue));
-        [socialProfiles addObjectsFromArray:linkedSocialProfiles];
-        CFRelease(linkedSocialProfileMultiValue);
-    }
-    CFRelease(socialProfileMultiValue);
-
-    NSMutableSet *accounts = [NSMutableSet set];
-    for(NSDictionary *socialProfile in socialProfiles){
-        if([socialProfile[@"service"] isEqualToString:(__bridge NSString *)kABPersonSocialProfileServiceTwitter]){
-            [accounts addObject:socialProfile[@"username"]];
-        }
-    }
-    return [NSSet setWithSet:accounts];
-}
+#pragma mark - NSObject
 
 - (BOOL)isEqual:(id)object{
-    if([object isKindOfClass:[self class]]){
-        if(self.record == [object record]){
-            return YES;
-        }
+    if(self == object){
+        return YES;
     }
-    return NO;
+
+    if(![object isKindOfClass:[KGNAddressBookContact class]]){
+        return NO;
+    }
+
+    return [self isEqualToAddressBookContact:(KGNAddressBookContact *)object];
+}
+
+- (NSUInteger)hash{
+    return ABS((NSInteger)self.record);
 }
 
 - (NSString *)description{
